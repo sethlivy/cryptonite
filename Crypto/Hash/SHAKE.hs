@@ -17,7 +17,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Crypto.Hash.SHAKE
-    (  SHAKE128 (..), SHAKE256 (..)
+    (  SHAKE128 (..), SHAKE256 (..), HashSHAKE (..)
     ) where
 
 import           Control.Monad (when)
@@ -28,9 +28,15 @@ import           Data.Bits
 import           Data.Data
 import           Data.Word (Word8, Word32)
 
-import           Data.Proxy (Proxy(..))
 import           GHC.TypeLits (Nat, KnownNat, type (+))
 import           Crypto.Internal.Nat
+
+-- | Type class of SHAKE algorithms.
+class HashAlgorithm a => HashSHAKE a where
+    -- | Alternate finalization needed for cSHAKE
+    cshakeInternalFinalize :: Ptr (Context a) -> Ptr (Digest a) -> IO ()
+    -- | Get the digest bit length
+    cshakeOutputLength :: a -> Int
 
 -- | SHAKE128 (128 bits) extendable output function.  Supports an arbitrary
 -- digest size, to be specified as a type parameter of kind 'Nat'.
@@ -52,6 +58,10 @@ instance KnownNat bitlen => HashAlgorithm (SHAKE128 bitlen) where
     hashInternalUpdate        = c_sha3_update
     hashInternalFinalize      = shakeFinalizeOutput (Proxy :: Proxy bitlen)
 
+instance KnownNat bitlen => HashSHAKE (SHAKE128 bitlen) where
+    cshakeInternalFinalize = cshakeFinalizeOutput (Proxy :: Proxy bitlen)
+    cshakeOutputLength _ = integralNatVal (Proxy :: Proxy bitlen)
+
 -- | SHAKE256 (256 bits) extendable output function.  Supports an arbitrary
 -- digest size, to be specified as a type parameter of kind 'Nat'.
 --
@@ -72,6 +82,10 @@ instance KnownNat bitlen => HashAlgorithm (SHAKE256 bitlen) where
     hashInternalUpdate        = c_sha3_update
     hashInternalFinalize      = shakeFinalizeOutput (Proxy :: Proxy bitlen)
 
+instance KnownNat bitlen => HashSHAKE (SHAKE256 bitlen) where
+    cshakeInternalFinalize = cshakeFinalizeOutput (Proxy :: Proxy bitlen)
+    cshakeOutputLength _ = integralNatVal (Proxy :: Proxy bitlen)
+
 shakeFinalizeOutput :: KnownNat bitlen
                     => proxy bitlen
                     -> Ptr (Context a)
@@ -79,6 +93,16 @@ shakeFinalizeOutput :: KnownNat bitlen
                     -> IO ()
 shakeFinalizeOutput d ctx dig = do
     c_sha3_finalize_shake ctx
+    c_sha3_output ctx dig (byteLen d)
+    shakeTruncate d (castPtr dig)
+
+cshakeFinalizeOutput :: KnownNat bitlen
+                     => proxy bitlen
+                     -> Ptr (Context a)
+                     -> Ptr (Digest a)
+                     -> IO ()
+cshakeFinalizeOutput d ctx dig = do
+    c_sha3_finalize_cshake ctx
     c_sha3_output ctx dig (byteLen d)
     shakeTruncate d (castPtr dig)
 
@@ -99,6 +123,9 @@ foreign import ccall "cryptonite_sha3_update"
 
 foreign import ccall unsafe "cryptonite_sha3_finalize_shake"
     c_sha3_finalize_shake :: Ptr (Context a) -> IO ()
+
+foreign import ccall unsafe "cryptonite_sha3_finalize_cshake"
+    c_sha3_finalize_cshake :: Ptr (Context a) -> IO ()
 
 foreign import ccall unsafe "cryptonite_sha3_output"
     c_sha3_output :: Ptr (Context a) -> Ptr (Digest a) -> Word32 -> IO ()
